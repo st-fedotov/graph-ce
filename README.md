@@ -24,8 +24,19 @@ duration: 10.7 min on 128 CPU cores (no GPU)
 ```
 
 The graph is a *double broom*: two stars (9 leaves each) joined through a
-shared "bridge" vertex of degree 2. Wagner's paper highlights the same
+shared "bridge" vertex of degree 2. Adam Wagner's paper highlights the same
 structural family.
+
+![9/9 symmetric double broom: λ₁=√10, μ=2, score=+0.0804](plots/winner_9_9_double_broom.png)
+
+A second, slightly tighter counterexample falls out of the no-migration
+configuration — an 8/10 split with score +0.0155:
+
+![8/10 asymmetric double broom: λ₁=3.227, μ=2, score=+0.0155](plots/winner_8_10_double_broom.png)
+
+Both are reproducible from saved adjacency matrices via
+`graph-ce-plot-winner runs/n19_success` (and similarly for the
+`runs/n19_success_with_migration` artifact tree).
 
 ## Trajectories across configurations
 

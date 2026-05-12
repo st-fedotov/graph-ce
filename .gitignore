@@ -17,9 +17,11 @@ env/
 # every invocation of `graph-ce`; not source.
 runs/
 
-# Generated plots — except the canonical comparison shown in the README.
+# Generated plots — except the canonical figures shown in the README.
 plots/*
 !plots/setup_comparison.png
+!plots/winner_8_10_double_broom.png
+!plots/winner_9_9_double_broom.png
 
 # Wagner's original reference code (fetched locally for line-by-line
 # comparison during development; not ours to redistribute — see README).
