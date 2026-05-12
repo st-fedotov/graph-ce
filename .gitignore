@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+.pytest_cache/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# CEM run outputs (logs, metrics, certificates, summaries) — produced by
+# every invocation of `graph-ce`; not source.
+runs/
+
+# Generated plots — except the canonical comparison shown in the README.
+plots/*
+!plots/setup_comparison.png
+
+# Wagner's original reference code (fetched locally for line-by-line
+# comparison during development; not ours to redistribute — see README).
+reference/
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~

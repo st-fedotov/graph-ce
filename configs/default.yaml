@@ -1,0 +1,75 @@
+# Default configuration for graph_ce.
+# Wagner's CEM on Conjecture 2.1 (lambda_1 + mu < sqrt(n-1) + 1).
+# Every hyperparameter lives here; nothing in code should hardcode these.
+
+problem:
+  # Graph size. n*(n-1)/2 binary edge decisions per sample.
+  # For n=19 the known counterexample exists; we use this as the default target.
+  n: 19
+
+model:
+  # MLP shape: input -> hidden_sizes -> 1 (sigmoid).
+  # Input dim is 2 * n*(n-1)/2 (state bits + position one-hot), derived at runtime.
+  hidden_sizes: [128, 64, 4]
+  learning_rate: 0.0001
+  # 'sgd' matches Wagner's demo; 'adam' is also supported.
+  optimizer: sgd
+  # Weight initialization scheme:
+  #   'keras'           - Glorot/Xavier uniform weights, zero biases.
+  #                       Matches Keras' nn.Dense default, which is what Wagner
+  #                       relies on. CEM is sensitive to initial exploration;
+  #                       this gives an unbiased Bernoulli(0.5) starting policy.
+  #   'pytorch_default' - PyTorch nn.Linear default: Kaiming uniform with
+  #                       a=sqrt(5) weights and a non-zero uniform bias in
+  #                       [-1/sqrt(fan_in), +1/sqrt(fan_in)]. This biases
+  #                       the initial sigmoid away from 0.5 and causes CEM
+  #                       to plateau hard at a local optimum (see README).
+  init: keras
+
+cem:
+  # Wagner's faithful CEM hyperparameters.
+  n_sessions: 1000
+  elite_percentile: 93        # top 7% of sessions used to train the model
+  super_elite_percentile: 94  # top 6% carried over to next iteration
+  max_iters: 100000
+  train_epochs_per_iter: 1
+  # Matches Keras' model.fit() default, which is what Wagner relies on.
+  # Larger batches collapse the policy onto the elite distribution too fast.
+  train_batch_size: 32
+
+parallelism:
+  n_islands: 16
+  cores_per_island: 8
+  # 'spawn' is safer than 'fork' with torch (avoids inheriting CUDA / locked
+  # mutex state from the parent). Slightly slower process startup, but island
+  # startup happens once per run.
+  start_method: spawn
+
+migration:
+  enabled: true
+  # Every interval_iters CEM iterations, each island sends its top_k elite
+  # samples to the coordinator, which merges them into a global top_k and
+  # broadcasts back to every island.
+  interval_iters: 50
+  top_k: 50
+
+stopping:
+  # Hard wall-clock budget for the whole run.
+  wall_clock_seconds: 43200    # 12 hours
+  # Any score strictly above this threshold counts as a counterexample.
+  score_threshold: 0.0
+
+logging:
+  # CEM iterations between per-island human-readable progress log lines.
+  log_interval_iters: 10
+  # CEM iterations between rows in the per-island JSONL metrics stream.
+  # 1 means every iteration; includes the best graph (bit string) per iter.
+  metrics_interval_iters: 1
+  output_dir: ./runs
+  # Mirror the coordinator log to stdout as well as to coordinator.log.
+  stdout_mirror: true
+
+seed:
+  # Master seed; each island derives its own seed = master_seed + island_id.
+  # If null, a time-based seed is generated (logged for reproducibility).
+  master_seed: null

@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "graph_ce"
+version = "0.1.0"
+description = "Cross-entropy method for combinatorial conjectures, parallelized across CPUs."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.1",
+    "numpy>=1.24",
+    "pyyaml>=6.0",
+    "pydantic>=2.5",
+    "matplotlib>=3.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    # NetworkX is used only as a reference oracle in the matching stress test.
+    "networkx>=3.0",
+]
+
+[project.scripts]
+graph-ce = "graph_ce.run:main"
+graph-ce-status = "graph_ce.status:main"
+graph-ce-plot = "graph_ce.plot_trajectories:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
