@@ -107,8 +107,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--xlim",
         type=str,
-        default=None,
-        help="Optional x-axis limit 'lo,hi' (default: auto from data).",
+        default="0,10000",
+        help="X-axis limit 'lo,hi' (default: 0,10000 to keep early-iter dynamics "
+             "readable; pass 'auto' to scale to the full data range).",
     )
     p.add_argument(
         "--ylim",
@@ -188,7 +189,7 @@ def main(argv: list[str] | None = None) -> int:
         f"Top-{args.top_k} island trajectories per setup, Conjecture 2.1 at n=19"
     )
     ax.grid(True, alpha=0.3)
-    if args.xlim:
+    if args.xlim and args.xlim.lower() != "auto":
         lo, hi = (float(x) for x in args.xlim.split(","))
         ax.set_xlim(lo, hi)
     if args.ylim:
