@@ -191,14 +191,73 @@ The single change that turned the project from "stuck forever at score
 **Keras' `Dense` default**, which Wagner relies on, is **Glorot uniform**
 for weights with **zero biases**.
 
-The difference looks cosmetic. It is not. With zero biases the initial
-sigmoid output is unbiased around 0.5, so the initial CEM policy is
-honest Bernoulli(0.5) over each edge bit. With PyTorch's non-zero biases,
-four stacked layers shift the initial logit away from 0, the starting
-policy is biased toward a particular family of bit strings, and CEM —
-being a policy-improvement method whose entire signal is "do more of what
-the elites did" — happily reinforces the bias and locks into a local
-optimum from which it cannot escape.
+The difference looks cosmetic. It is not. We sampled 500 graphs from a
+freshly-initialized PolicyMLP under each scheme, repeated across 8 model
+seeds, and measured the per-position `P(bit=1)` after feeding the
+all-zero state at each of the 171 positions.
+
+![Per-position P(bit=1) heatmap across 8 seeds × 2 inits](plots/init_position_bias.png)
+
+The heatmap rows tell most of the story:
+
+- **Keras rows are uniformly near-white.** Each seed, each of the 171
+  positions: `P(bit=1)` ≈ 0.5. The policy starts as honest
+  Bernoulli(0.5) — exactly the uniform prior CEM expects.
+- **PyTorch-default rows are solid-coloured horizontal stripes.** Each
+  individual seed is essentially *constant* across all positions —
+  some seeds are uniformly blue (P ≈ 0.41, prefer 0 → start sparse),
+  others uniformly red (P ≈ 0.6, prefer 1 → start dense). The
+  position-to-position variation within a seed is tiny next to the
+  seed-to-seed shift.
+
+Numerically:
+
+```
+init                |P-0.5|  mean     std    max      per-seed max
+keras                          0.008  0.009  0.059    [.020 .048 .022 .027 .059 .019 .021 .015]
+pytorch_default                0.065  0.035  0.119    [.062 .094 .087 .016 .080 .058 .014 .119]
+```
+
+The pytorch_default per-seed maxima reach **±0.12 from 0.5**: a roughly
+8× larger average bias and a 2× larger worst-case bias than keras.
+
+The mechanism is simple: a non-zero bias in each of the 4 layers, with
+random weights between them, accumulates into a roughly seed-dependent
+*global* offset on the output logit, almost independent of which
+position is being queried. The position one-hot does contribute a small
+position-dependent term, but at standard Xavier/Kaiming weight scales
+that contribution is dominated by the accumulated bias.
+
+Sampling example graphs from each init makes the effect tangible:
+
+![Example graphs sampled per seed under each init](plots/init_example_graphs.png)
+
+Keras rows produce graphs in a narrow density band around 50%; the
+pytorch_default row spans 76 to 113 edges depending on which seed
+happens to bias which way — including one seed (right-most) where
+**every** bit is sampled with P ≈ 0.6.
+
+For CEM specifically:
+
+- The known n=19 counterexample has 18 edges out of 171, **~10.5%
+  density**. CEM has to climb *down* from the starting density to find it.
+- With keras init, all seeds start at ~50% density. Roughly equal climb
+  for everyone, all starting from the right distribution.
+- With pytorch-default, seeds start scattered. Some land at 40%, some
+  at 60%. The 60%-density seeds have a noticeably longer climb (≈100
+  edges → ≈18 edges), and within Adam Wagner's reported 300–10000 iters
+  per run, more of them run out of runway. The lucky seeds that started
+  near 50% might still succeed; in our experiments none did, but with
+  only 16 seeds that's not statistically conclusive — only that the
+  empirical hit rate is meaningfully lower.
+
+The cleaner framing is therefore: **pytorch-default's non-zero biases
+turn "16 IID seeds drawn from Bernoulli(0.5)" into "16 seeds drawn from
+a wider, more dispersed distribution, some of which have a much steeper
+hill to climb."** Sometimes none of those 16 escapes within budget.
+The keras-init seeds all start at the right place.
+
+You can reproduce these plots with `scripts/compare_initializations.py`.
 
 The `model.init` config field toggles between the two:
 
