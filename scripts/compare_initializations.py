@@ -127,7 +127,7 @@ def plot_position_heatmap(per_init_per_seed: dict[str, np.ndarray]) -> None:
 
     fig.suptitle(
         "P(bit = 1) at each position with all-zero state, across 8 model seeds.\n"
-        "Diverging colormap centred at 0.5: deep blue ≈ never, deep red ≈ always.",
+        "Diverging colormap: P ≈ 0 (blue) … 0.5 (white) … 1 (red).",
         fontsize=11, y=1.02,
     )
     # Shared colorbar to the right of the two heatmap rows.
