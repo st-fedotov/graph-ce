@@ -68,32 +68,21 @@ island's best graph last changed. The probe lives at
 ![One tree — v3 (PyTorch init + migration, b=512)](plots/plateau_trees_n19_main_plateau_v3.png)
 
 In `n19_main_plateau_v3` (PyTorch init, migration on, b=512), all 16
-islands converge to **the same tree**, up to graph isomorphism — in fact
-up to *labelled* identity (Hamming distance 0 across all 16 final
-states). All 16 islands stopped improving by iteration 2651 (±17), and
-then spent the next 2200 iters (45% of the run's wall time) producing
-zero further improvement. Migration broadcasts elites every 50 iters,
-which here means everyone gets dragged into a single basin and held
-there. Score: −2.178, λ₁ = 2.420, μ = 5, 18 edges — a two-hub spider
-tree.
+islands converge to **the same tree**, up to graph isomorphism, and showed no further improvement.
 
 ### Without migration: every island finds its own local optimum
 
 ![16 distinct graphs — v4 (PyTorch init, no migration, b=512)](plots/plateau_trees_n19_main_plateau_v4.png)
 
-In `n19_main_plateau_v4` (PyTorch init, no migration, b=512), the 16
-final graphs are **16 distinct (non-isomorphic) graphs** — every island
-discovers a unique local optimum. Eight of them are trees (18 edges);
-the other eight are sparse graphs with 19 or 20 edges (one or two extra
-edges closing small cycles). The best one (island 01) has μ = 4 and
+In `n19_main_plateau_v4` (PyTorch init, no migration, b=512), every island
+discovers a unique local optimum. The best one (island 01) has μ = 4 and
 score −1.512 — a long thin tree with a degree-7 hub; the rest cluster
 around μ = 5, λ₁ between 2.39 and 3.03.
 
 ![16 distinct graphs — v5 (PyTorch init, no migration, b=32)](plots/plateau_trees_n19_main_plateau_v5.png)
 
 `n19_main_plateau_v5` (PyTorch init, no migration, b=32) shows the same
-story: 16 unique non-isomorphic graphs, 11 trees + 5 near-trees, all in
-the μ = 5 / λ₁ ∈ [2.33, 2.86] basin. Some islands froze as early as
+story: 16 unique non-isomorphic graphs. Some islands froze as early as
 iter 1255 of 10500 and produced no further improvement across the
 remaining 88% of the run.
 
