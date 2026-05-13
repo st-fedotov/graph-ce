@@ -75,7 +75,8 @@ def plot_position_heatmap(per_init_per_seed: dict[str, np.ndarray]) -> None:
 
     fig, axes = plt.subplots(
         len(init_modes) + 1, 1,
-        figsize=(13, 7),
+        figsize=(14, 11),
+        constrained_layout=True,
         gridspec_kw={"height_ratios": [1] * len(init_modes) + [0.9]},
     )
 
@@ -88,19 +89,16 @@ def plot_position_heatmap(per_init_per_seed: dict[str, np.ndarray]) -> None:
             data, aspect="auto", cmap=cmap, vmin=vmin, vmax=vmax,
             interpolation="nearest",
         )
-        ax.set_title(
-            f"{init}: P(bit=1) at each position, {data.shape[0]} model seeds "
-            f"(rows). Diverging colormap centred at 0.5; deep blue ≈ never, "
-            f"deep red ≈ always.",
-            fontsize=10,
-        )
+        ax.set_title(f"{init}", fontsize=12, loc="left", pad=8)
         ax.set_ylabel("seed")
         ax.set_yticks(range(data.shape[0]))
-        ax.set_xlabel("position index (0..170, = upper-triangle edge ordering)")
+        # Only the bottom heatmap shows an x-label; top one borrows the
+        # axis context from below.
+        if ax is axes[len(init_modes) - 1]:
+            ax.set_xlabel("position index (0..170, upper-triangle edge ordering)")
 
     # Bottom axis: |P - 0.5| summary per init.
     ax_bias = axes[-1]
-    width = 1.0
     for offset, init in enumerate(init_modes):
         data = per_init_per_seed[init]
         bias = np.abs(data - 0.5)
@@ -109,30 +107,32 @@ def plot_position_heatmap(per_init_per_seed: dict[str, np.ndarray]) -> None:
         x = np.arange(data.shape[0]) + offset * 0.35 - 0.175
         ax_bias.bar(
             x, per_seed_mean, width=0.3,
-            label=f"{init} | mean |P-0.5| (avg across positions)",
+            label=f"{init}: mean |P − 0.5|",
             color={"keras": "#1f77b4", "pytorch_default": "#d62728"}[init],
-            alpha=0.7,
+            alpha=0.75,
         )
         ax_bias.errorbar(
             x, per_seed_mean,
             yerr=[np.zeros_like(per_seed_mean), per_seed_max - per_seed_mean],
             fmt="none", ecolor="black", capsize=3, linewidth=0.8,
-            label=f"{init} | max |P-0.5| across positions" if offset == 0 else None,
+            label="max |P − 0.5| (whisker)" if offset == 0 else None,
         )
-    ax_bias.set_ylabel("|P(bit=1) - 0.5|")
+    ax_bias.set_ylabel("|P(bit=1) − 0.5|")
     ax_bias.set_xlabel("seed")
-    ax_bias.set_title(
-        "How far each seed's per-position policy is from uniform-Bernoulli(0.5). "
-        "Bar = mean across positions; whisker = max across positions.",
-        fontsize=10,
-    )
-    ax_bias.legend(loc="upper right", fontsize=8)
+    ax_bias.set_title("Per-seed deviation from uniform Bernoulli(0.5)",
+                      fontsize=12, loc="left", pad=8)
+    ax_bias.legend(loc="upper right", fontsize=9)
     ax_bias.grid(alpha=0.3, axis="y")
     ax_bias.set_xticks(range(per_init_per_seed[init_modes[0]].shape[0]))
 
-    # Single shared colorbar for the heatmap rows.
+    fig.suptitle(
+        "P(bit = 1) at each position with all-zero state, across 8 model seeds.\n"
+        "Diverging colormap centred at 0.5: deep blue ≈ never, deep red ≈ always.",
+        fontsize=11, y=1.02,
+    )
+    # Shared colorbar to the right of the two heatmap rows.
     fig.colorbar(im, ax=axes[: len(init_modes)].tolist(),
-                 shrink=0.7, label="P(bit=1)", pad=0.02)
+                 shrink=0.85, label="P(bit=1)", pad=0.015)
 
     out = Path("plots/init_position_bias.png")
     out.parent.mkdir(parents=True, exist_ok=True)
