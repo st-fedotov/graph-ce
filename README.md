@@ -49,6 +49,84 @@ two correct runs. The bad-init configs (green, blue, orange) flatline well
 below 0 regardless of batch size or migration — that's the "stuck-in-local-
 optimum" signature.
 
+## What the failure looks like — anatomy of the bad-init plateau
+
+The three bad-init runs (v3/v4/v5 above) each have 16 parallel islands.
+The natural question: when those runs plateau, what graph is each island
+*stuck on*? Are the 16 islands all stuck on the same graph, or different
+ones? And how stable is the stuck state — does it fluctuate or freeze
+solid?
+
+We answered this by reading each island's per-iteration metrics file
+(every iter records the best graph seen so far), partitioning the 16
+final graphs into graph-isomorphism classes, and timing when each
+island's best graph last changed. The probe lives at
+`scripts/explore_plateau_topology.py`.
+
+### With migration: all 16 islands collapse to the same tree
+
+![One tree — v3 (PyTorch init + migration, b=512)](plots/plateau_trees_n19_main_plateau_v3.png)
+
+In `n19_main_plateau_v3` (PyTorch init, migration on, b=512), all 16
+islands converge to **the same tree**, up to graph isomorphism — in fact
+up to *labelled* identity (Hamming distance 0 across all 16 final
+states). All 16 islands stopped improving by iteration 2651 (±17), and
+then spent the next 2200 iters (45% of the run's wall time) producing
+zero further improvement. Migration broadcasts elites every 50 iters,
+which here means everyone gets dragged into a single basin and held
+there. Score: −2.178, λ₁ = 2.420, μ = 5, 18 edges — a two-hub spider
+tree.
+
+### Without migration: every island finds its own local optimum
+
+![16 distinct graphs — v4 (PyTorch init, no migration, b=512)](plots/plateau_trees_n19_main_plateau_v4.png)
+
+In `n19_main_plateau_v4` (PyTorch init, no migration, b=512), the 16
+final graphs are **16 distinct (non-isomorphic) graphs** — every island
+discovers a unique local optimum. Eight of them are trees (18 edges);
+the other eight are sparse graphs with 19 or 20 edges (one or two extra
+edges closing small cycles). The best one (island 01) has μ = 4 and
+score −1.512 — a long thin tree with a degree-7 hub; the rest cluster
+around μ = 5, λ₁ between 2.39 and 3.03.
+
+![16 distinct graphs — v5 (PyTorch init, no migration, b=32)](plots/plateau_trees_n19_main_plateau_v5.png)
+
+`n19_main_plateau_v5` (PyTorch init, no migration, b=32) shows the same
+story: 16 unique non-isomorphic graphs, 11 trees + 5 near-trees, all in
+the μ = 5 / λ₁ ∈ [2.33, 2.86] basin. Some islands froze as early as
+iter 1255 of 10500 and produced no further improvement across the
+remaining 88% of the run.
+
+### What the basin looks like
+
+The shared signature across all three bad-init runs:
+
+- **Sparse**: 18–20 edges (the counterexample we eventually want is
+  also 18 edges, so density alone is not the giveaway).
+- **Mostly trees, sometimes with one or two short cycles.**
+- **μ = 5** (with one μ = 4 outlier).
+- **λ₁ ≈ 2.4–3.0.**
+- **Two hubs** of degree 4–6, a few degree-2 internal vertices, lots of
+  degree-1 leaves — a "small spider" shape.
+
+The counterexample we want is also a tree, but a *very* different one:
+a *double broom* (long path of degree-2 vertices, with a bundle of
+leaves at each end), with μ = 2 and λ₁ > √18 ≈ 4.24. To get from a
+small two-hub spider to a double broom requires reshaping many edges
+simultaneously, which a per-edge Bernoulli policy cannot do in one or
+two CEM steps. The bad-init basin is therefore both *deep* (small
+perturbations always score worse) and *far* (many edges separate it
+from the counterexample basin). Together that explains the flatline.
+
+You can reproduce the analysis with:
+
+```bash
+.venv/bin/python scripts/explore_plateau_topology.py \
+    runs/n19_main_plateau_v3 runs/n19_main_plateau_v4 runs/n19_main_plateau_v5 \
+    --mode all-classes \
+    --output plots/plateau_trees.png
+```
+
 ## Quick start
 
 ```bash
