@@ -228,7 +228,7 @@ position is being queried. The position one-hot does contribute a small
 position-dependent term, but at standard Xavier/Kaiming weight scales
 that contribution is dominated by the accumulated bias.
 
-Sampling example graphs from each init makes the effect tangible:
+I guess it's hard to see this looking at the graphs themselves, but the numbers are quite characteristic:
 
 ![Example graphs sampled per seed under each init](plots/init_example_graphs.png)
 
