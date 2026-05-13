@@ -186,7 +186,7 @@ The single change that turned the project from "stuck forever at score
 
 **PyTorch's `nn.Linear` default initialization** is Kaiming uniform with
 `a=sqrt(5)` for weights, plus a **non-zero uniform bias** in
-`[−1/√fan_in, +1/√fan_in]`.
+`[−1/√d_in, +1/√d_in]`.
 
 **Keras' `Dense` default**, which Wagner relies on, is **Glorot uniform**
 for weights with **zero biases**.
