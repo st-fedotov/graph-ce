@@ -221,12 +221,7 @@ pytorch_default                0.065  0.035  0.119    [.062 .094 .087 .016 .080 
 The pytorch_default per-seed maxima reach **±0.12 from 0.5**: a roughly
 8× larger average bias and a 2× larger worst-case bias than keras.
 
-The mechanism is simple: a non-zero bias in each of the 4 layers, with
-random weights between them, accumulates into a roughly seed-dependent
-*global* offset on the output logit, almost independent of which
-position is being queried. The position one-hot does contribute a small
-position-dependent term, but at standard Xavier/Kaiming weight scales
-that contribution is dominated by the accumulated bias.
+This effect seems to be due to dying ReLU for the Pytorch-style initialization.
 
 I guess it's hard to see this looking at the graphs themselves, but the numbers are quite characteristic:
 
