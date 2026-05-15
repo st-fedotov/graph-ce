@@ -100,6 +100,7 @@ class IslandCEM:
             self.num_edges,
             config.model.hidden_sizes,
             init=config.model.init,
+            activation=config.model.activation,
         )
         if config.model.optimizer == "sgd":
             self.optimizer = torch.optim.SGD(self.model.parameters(), lr=config.model.learning_rate)

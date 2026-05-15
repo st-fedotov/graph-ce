@@ -16,6 +16,7 @@ class PolicyMLP(nn.Module):
         num_edges: int,
         hidden_sizes: list[int],
         init: str = "keras",
+        activation: str = "relu",
     ) -> None:
         super().__init__()
         input_dim = 2 * num_edges
@@ -23,12 +24,23 @@ class PolicyMLP(nn.Module):
         prev = input_dim
         for h in hidden_sizes:
             layers.append(nn.Linear(prev, h))
-            layers.append(nn.ReLU())
+            layers.append(self._make_activation(activation))
             prev = h
         layers.append(nn.Linear(prev, 1))
         self.net = nn.Sequential(*layers)
         self.num_edges = num_edges
         self._apply_init(init)
+
+    @staticmethod
+    def _make_activation(name: str) -> nn.Module:
+        if name == "relu":
+            return nn.ReLU()
+        if name == "leaky_relu":
+            return nn.LeakyReLU()
+        raise ValueError(
+            f"unknown model.activation: {name!r} "
+            "(must be 'relu' or 'leaky_relu')"
+        )
 
     def _apply_init(self, scheme: str) -> None:
         """Apply the configured weight init.
@@ -43,6 +55,16 @@ class PolicyMLP(nn.Module):
             weights and non-zero uniform biases in ``[-1/sqrt(fan_in),
             +1/sqrt(fan_in)]``. For a 4-layer stack the non-zero biases shift
             the initial policy away from Bernoulli(0.5), and CEM plateaus.
+
+        ``pytorch_weights_zero_bias`` (ablation: isolate the bias):
+            PyTorch nn.Linear default weights (Kaiming uniform with
+            ``a=sqrt(5)``) but biases forced to zero. Tests whether the
+            plateau is caused purely by the non-zero biases.
+
+        ``xavier_weights_pytorch_bias`` (ablation: isolate the weight scale):
+            Xavier uniform weights, but PyTorch's default non-zero uniform
+            biases left in place. Tests whether the larger Xavier weights
+            alone restore enough input-dependence to escape the plateau.
         """
         if scheme == "keras":
             for m in self.modules():
@@ -54,10 +76,22 @@ class PolicyMLP(nn.Module):
             # nn.Linear's own __init__ has already applied its default Kaiming
             # uniform + non-zero bias; nothing more to do.
             pass
+        elif scheme == "pytorch_weights_zero_bias":
+            # Keep nn.Linear's default Kaiming-uniform weights; zero biases.
+            for m in self.modules():
+                if isinstance(m, nn.Linear) and m.bias is not None:
+                    nn.init.zeros_(m.bias)
+        elif scheme == "xavier_weights_pytorch_bias":
+            # Replace weights with Xavier; leave PyTorch's nonzero uniform
+            # biases as nn.Linear's __init__ set them.
+            for m in self.modules():
+                if isinstance(m, nn.Linear):
+                    nn.init.xavier_uniform_(m.weight)
         else:
             raise ValueError(
                 f"unknown model.init scheme: {scheme!r} "
-                "(must be 'keras' or 'pytorch_default')"
+                "(must be 'keras', 'pytorch_default', "
+                "'pytorch_weights_zero_bias', or 'xavier_weights_pytorch_bias')"
             )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

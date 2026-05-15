@@ -31,7 +31,10 @@ class ModelConfig(BaseModel):
     hidden_sizes: list[int] = Field(min_length=1)
     learning_rate: float = Field(gt=0.0)
     optimizer: str = Field(pattern=r"^(sgd|adam)$")
-    init: str = Field(pattern=r"^(keras|pytorch_default)$")
+    init: str = Field(
+        pattern=r"^(keras|pytorch_default|pytorch_weights_zero_bias|xavier_weights_pytorch_bias)$"
+    )
+    activation: str = Field(default="relu", pattern=r"^(relu|leaky_relu)$")
 
 
 class CemConfig(BaseModel):

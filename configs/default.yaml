@@ -25,6 +25,10 @@ model:
   #                       the initial sigmoid away from 0.5 and causes CEM
   #                       to plateau hard at a local optimum (see README).
   init: keras
+  # Hidden-layer activation. 'relu' matches Wagner's reference; 'leaky_relu'
+  # is the ablation knob for testing whether dying-ReLU explains the
+  # pytorch_default plateau (negative slope = PyTorch default 0.01).
+  activation: relu
 
 cem:
   # Wagner's faithful CEM hyperparameters.

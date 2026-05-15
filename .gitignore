@@ -28,6 +28,10 @@ plots/*
 !plots/plateau_trees_n19_main_plateau_v3.png
 !plots/plateau_trees_n19_main_plateau_v4.png
 !plots/plateau_trees_n19_main_plateau_v5.png
+!plots/init_policy_distribution_4way.png
+!plots/generation_trajectory_distribution.png
+!plots/activation_through_layers.png
+!plots/activation_through_layers_leaky.png
 
 # Wagner's original reference code (fetched locally for line-by-line
 # comparison during development; not ours to redistribute — see README).
