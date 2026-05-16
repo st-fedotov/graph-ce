@@ -95,147 +95,49 @@ You can reproduce the analysis with:
     --output plots/plateau_trees.png
 ```
 
-## Quick start
-
-```bash
-python3 -m venv .venv
-.venv/bin/pip install -e ".[dev]"
-
-# Launch the n=19 search detached from your shell. Survives SSH disconnect,
-# Claude Code session timeouts, etc.
-scripts/launch_detached.sh n19_main
-
-# Watch progress (re-runnable, defaults to runs/n19_main/).
-.venv/bin/graph-ce-status
-
-# Stop cleanly (the coordinator catches SIGTERM and tears down all 16
-# island processes gracefully):
-kill "$(cat runs/n19_main.pid)"
-```
-
-When a counterexample is found the coordinator writes
-`runs/<run_name>/winner_certificate.txt` and exits.
-
-## Configuration
-
-Every tunable lives in `configs/default.yaml`. Nothing in the code
-hardcodes any of them. The shipped defaults are what won on a 128-core
-box; the only knobs you'll typically touch are `parallelism.*` (CPU
-budget) and `seed.master_seed` (reproducibility). Everything else is
-faithful to Adam Wagner's setup and should stay put unless you're doing
-an ablation.
-
-### Matching parallelism to your CPU count
-
-The total number of CPU-active processes during scoring is:
-
-&nbsp;&nbsp;&nbsp;&nbsp;`parallelism.n_islands × parallelism.cores_per_island`
-
-Set this product to your physical core count. The defaults are tuned
-for **128 cores** (16 × 8). If your machine differs, here are sane
-re-balancings:
-
-| Cores | `n_islands` | `cores_per_island` | Notes |
-|------:|------------:|-------------------:|-------|
-|     8 |           4 |                  2 | Tight; expect 30–60 min per attempt. |
-|    16 |           8 |                  2 | A laptop-class run. |
-|    32 |           8 |                  4 | A modest workstation. |
-|    64 |          16 |                  4 | Same seed diversity as production, half the throughput. |
-|   128 |          16 |                  8 | **Default — what found the counterexample in 10 min.** |
-|   256 |          32 |                  8 | More seeds in parallel, ~same per-island speed. |
-
-Two principles when sizing:
-
-1. **More islands = more independent seeds = higher chance one of them gets
-   lucky.** Adam Wagner reports ~30% per-seed success; with 16 islands
-   that compounds to ~99.5% (with migration on, the practical hit rate is
-   higher still — the lucky seed shares its discovery with the others).
-   Don't drop below ~4 islands unless you really have to.
-
-2. **More cores per island ≠ much faster per iteration.** Per-iter time
-   is dominated by the autoregressive sampling step (171 forward passes
-   through a tiny MLP, single-threaded by design — see the BLAS-pinning
-   note below), not by score evaluation. So cores beyond ~4 per island
-   give diminishing returns. Prefer adding islands to adding cores.
-
-Plus one hard rule: **never let `n_islands × cores_per_island` exceed your
-physical core count**, even by a little. Once total processes go over
-core count the BLAS-thread-pinning trick we rely on (everyone gets
-exactly one core) breaks, and per-iter time can blow up by ~500× into
-context-thrash hell. We've seen this happen.
-
-### Other knobs (in roughly decreasing order of "actually useful to tune")
-
-| Knob | Default | What it does |
-|------|---------|--------------|
-| `seed.master_seed` | `null` | `null` means time-based, logged. Set an integer to reproduce a specific run exactly. Each island gets `master_seed + island_id`. |
-| `migration.enabled` | `true` | Off by default in the no-mig ablation; on for production. With the tie-cap in place, migration is roughly a 2× speedup. |
-| `migration.interval_iters` | `50` | Iterations between migration syncs. Lower = more sharing, less seed diversity. Higher = closer to no-migration. |
-| `migration.top_k` | `50` | Number of elites broadcast to every island at each sync. |
-| `stopping.wall_clock_seconds` | `43200` | Hard 12 h budget. Drop to e.g. `1800` for a "try 30 min and bail" run. |
-| `cem.max_iters` | `100000` | Per-island iteration cap. Defaults are effectively unbounded; wall clock is what stops you. |
-| `logging.log_interval_iters` | `10` | How often each island writes a human-readable progress line to its log. |
-| `logging.metrics_interval_iters` | `1` | How often the per-iter JSONL row is written. Includes the iteration's best graph; leave at 1 unless disk space is a concern. |
-| `problem.n` | `19` | Graph size. The n=19 counterexample is the famous one; smaller `n` (e.g. 5–10) is useful for smoke testing. |
-
-### Things you should not touch unless you know why
-
-- `model.hidden_sizes`, `model.learning_rate`, `model.optimizer` — Adam
-  Wagner's exact values. Deviating without an ablation is almost
-  certainly worse.
-- `cem.n_sessions`, `cem.elite_percentile`, `cem.super_elite_percentile`,
-  `cem.train_batch_size`, `cem.train_epochs_per_iter` — same.
-- `parallelism.start_method` — leave at `spawn`. `fork` shares torch
-  state across processes and produces deeply weird bugs.
-- `model.init` — `keras` is the right choice and the only setting under
-  which we've ever found a counterexample. `pytorch_default` is kept as
-  an ablation toggle to reproduce the plateau failure mode; see the
-  "What 'good init' means" section.
-
-## What's in the box
-
-```
-configs/default.yaml      every tunable — graph size, MLP shape, CEM percentiles,
-                          parallelism, migration cadence, logging, RNG seed.
-                          Nothing in code hardcodes these.
-
-src/graph_ce/
-  config.py               pydantic loader + override mechanism
-  model.py                PolicyMLP (342 → 128 → 64 → 4 → 1, sigmoid)
-  score.py                sqrt(n-1)+1 − λ₁ − μ (or -INF if disconnected)
-  matching.py             pure-Python Edmonds blossom (~24× faster than NetworkX
-                          on n=19, validated by stress test in tests/)
-  sampler.py              vectorized autoregressive bit-by-bit generation
-  cem.py                  one CEM iteration (sample → score → elite → train),
-                          with Wagner's percentile tie-cap
-  island.py               long-running worker: own MLP, own RNG, own score Pool
-  coordinator.py          master process: 16 islands, migration broker,
-                          liveness monitor, signal-safe graceful shutdown
-  verify.py               independently re-scores winners and writes the
-                          certificate
-  status.py               graph-ce-status: at-a-glance run health
-  plot_trajectories.py    graph-ce-plot: trajectory comparison figure
-  run.py                  graph-ce CLI entry
-
-scripts/
-  launch_detached.sh      setsid+nohup launcher — runs survive harness/session
-                          cleanup; writes runs/<name>.pid for `kill` later
-
-tests/                    65 unit tests (matching ↔ NetworkX oracle, sampling
-                          determinism, elite tie-cap, init schemes, smoke E2E)
-```
-
 ## What "good init" means — and why it matters so much
 
 The single change that turned the project from "stuck forever at score
 -1.5" into "finds the counterexample in 10 minutes":
 
-**PyTorch's `nn.Linear` default initialization** is Kaiming uniform with
-`a=sqrt(5)` for weights, plus a **non-zero uniform bias** in
-`[−1/sqrt(d_in), +1/sqrt(d_in)]`.
+**PyTorch's `nn.Linear` default**:
 
-**Keras' `Dense` default**, which Wagner relies on, is **Glorot uniform**
-for weights with **zero biases**.
+- **Weights** come from `nn.init.kaiming_uniform_(weight, a=√5)`.
+  Plugging `a=√5` into the Kaiming formula yields gain = `√(2/(1+5)) =
+  1/√3`, so the bound simplifies to `1/√fan_in`. Weights are drawn from
+  `U(−1/√fan_in, +1/√fan_in)`. For our four-layer MLP that's `±0.054`
+  (layer 1, 342→128), `±0.088` (layer 2, 128→64), `±0.125` (layer 3,
+  64→4), `±0.500` (layer 4, 4→1).
+- **Biases** are *also* drawn from `U(−1/√fan_in, +1/√fan_in)` — same
+  bounds as the weights, **not zero**.
+
+This is a [well-known historical artifact in PyTorch](https://github.com/pytorch/pytorch/issues/15314):
+the function name references Kaiming/He init (He et al., 2015 — derived
+for ReLU with `a=0` so that activation variance is preserved through
+deep stacks), but the `a=√5` parameter reduces the formula to LeCun's
+1998 bounds. LeCun's scheme is calibrated for linear or tanh networks
+fed dense zero-mean unit-variance inputs. None of those conditions
+hold for our setup: we have ReLU activations and sparse one-hot inputs
+where the effective fan-in is **1**, not 342. The non-zero biases are
+heuristic too — Glorot, Kaiming, and LeCun all use zero biases in
+their original derivations.
+
+**Keras's `Dense` default** (what Adam Wagner relies on):
+
+- **Weights** are Glorot ("Xavier") uniform — drawn from `U(−a, +a)`
+  with `a = √(6 / (fan_in + fan_out))`. For our four-layer MLP that's
+  `±0.113` (layer 1), `±0.177` (layer 2), `±0.297` (layer 3), `±1.095`
+  (layer 4).
+- **Biases** are zero.
+
+Glorot & Bengio (2010) derived this scheme to simultaneously preserve
+forward-activation variance and backward-gradient variance across
+layers. The derivation assumes (i) zero-mean unit-variance inputs and
+(ii) activations approximately linear around zero with unit derivative
+(tanh, sigmoid). It is therefore not theoretically optimal for ReLU —
+Kaiming/He is — but for shallow ReLU nets like ours it works fine, and
+the zero biases mean a fresh model emits `sigmoid(0) = 0.5` on average,
+giving CEM an honest Bernoulli(½) starting policy.
 
 The difference looks cosmetic. It is not. We sampled 500 graphs from a
 freshly-initialized PolicyMLP under each scheme, repeated across 8 model
@@ -251,11 +153,14 @@ Three diagnostic probes (`scripts/init_policy_distribution.py`,
 `scripts/activation_through_layers.py`) pin the failure on the init
 *geometry* — not the activation, not the optimizer.
 
-We instantiated fresh PolicyMLPs under four init schemes and measured
-the iter-0 `P(bit=1)` statistics (mean and std *across the 171
-positions*, with the blank state as input):
-
-![Iter-0 policy distribution per init scheme](plots/init_policy_distribution_4way.png)
+We probed each init scheme with the following batch. The model expects
+a 342-dimensional input: the first 171 coordinates are the **state**
+(edge bits already sampled, 0 or 1), and the last 171 are a **position
+one-hot** (which edge to decide next). We fed it the "blank-state"
+batch — state set to all zeros, position one-hot stepped through each
+of the 171 positions in turn. That gives 171 model outputs per model,
+one per position. We summarise them by their mean `P̄(blank)` and
+standard deviation `σ(blank)` *across the 171 positions*:
 
 | init                          | P̄(blank) | σ(blank)   |
 |-------------------------------|----------|------------|
@@ -398,6 +303,174 @@ so the failure can be replicated and decomposed.
    ~24× speedup. The replacement is randomized-stress-tested against
    NetworkX on hundreds of graphs at production size.
 
+## Quick start
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -e ".[dev]"
+
+# Launch the n=19 search detached from your shell. Survives SSH disconnect,
+# Claude Code session timeouts, etc.
+scripts/launch_detached.sh n19_main
+
+# Watch progress (re-runnable, defaults to runs/n19_main/).
+.venv/bin/graph-ce-status
+
+# Stop cleanly (the coordinator catches SIGTERM and tears down all 16
+# island processes gracefully):
+kill "$(cat runs/n19_main.pid)"
+```
+
+When a counterexample is found the coordinator writes
+`runs/<run_name>/winner_certificate.txt` and exits.
+
+### Reproducing the published-counterexample search
+
+The default config is exactly the configuration that won. Running
+`scripts/launch_detached.sh n19_main` and waiting should produce a winner
+within roughly 10–30 minutes (CEM is noisy, single-run variance is high).
+With migration **off** and everything else default, expect ~20 minutes.
+
+To reproduce the *failure modes* described in the sections above (e.g.
+for a blog post or to teach CEM gotchas), override the config:
+
+```bash
+# Reproduce the PyTorch-default init plateau:
+scripts/launch_detached.sh n19_bad_init \
+    --override model.init=pytorch_default
+```
+
+## Configuration
+
+Every tunable lives in `configs/default.yaml`. Nothing in the code
+hardcodes any of them. The shipped defaults are what won on a 128-core
+box; the only knobs you'll typically touch are `parallelism.*` (CPU
+budget) and `seed.master_seed` (reproducibility). Everything else is
+faithful to Adam Wagner's setup and should stay put unless you're doing
+an ablation.
+
+### Matching parallelism to your CPU count
+
+The total number of CPU-active processes during scoring is:
+
+&nbsp;&nbsp;&nbsp;&nbsp;`parallelism.n_islands × parallelism.cores_per_island`
+
+Set this product to your physical core count. The defaults are tuned
+for **128 cores** (16 × 8). If your machine differs, here are sane
+re-balancings:
+
+| Cores | `n_islands` | `cores_per_island` | Notes |
+|------:|------------:|-------------------:|-------|
+|     8 |           4 |                  2 | Tight; expect 30–60 min per attempt. |
+|    16 |           8 |                  2 | A laptop-class run. |
+|    32 |           8 |                  4 | A modest workstation. |
+|    64 |          16 |                  4 | Same seed diversity as production, half the throughput. |
+|   128 |          16 |                  8 | **Default — what found the counterexample in 10 min.** |
+|   256 |          32 |                  8 | More seeds in parallel, ~same per-island speed. |
+
+Two principles when sizing:
+
+1. **More islands = more independent seeds = higher chance one of them gets
+   lucky.** Adam Wagner reports ~30% per-seed success; with 16 islands
+   that compounds to ~99.5% (with migration on, the practical hit rate is
+   higher still — the lucky seed shares its discovery with the others).
+   Don't drop below ~4 islands unless you really have to.
+
+2. **More cores per island ≠ much faster per iteration.** Per-iter time
+   is dominated by the autoregressive sampling step (171 forward passes
+   through a tiny MLP, single-threaded by design — see the BLAS-pinning
+   note above), not by score evaluation. So cores beyond ~4 per island
+   give diminishing returns. Prefer adding islands to adding cores.
+
+Plus one hard rule: **never let `n_islands × cores_per_island` exceed your
+physical core count**, even by a little. Once total processes go over
+core count the BLAS-thread-pinning trick we rely on (everyone gets
+exactly one core) breaks, and per-iter time can blow up by ~500× into
+context-thrash hell. We've seen this happen.
+
+### Other knobs (in roughly decreasing order of "actually useful to tune")
+
+| Knob | Default | What it does |
+|------|---------|--------------|
+| `seed.master_seed` | `null` | `null` means time-based, logged. Set an integer to reproduce a specific run exactly. Each island gets `master_seed + island_id`. |
+| `migration.enabled` | `true` | Off by default in the no-mig ablation; on for production. With the tie-cap in place, migration is roughly a 2× speedup. |
+| `migration.interval_iters` | `50` | Iterations between migration syncs. Lower = more sharing, less seed diversity. Higher = closer to no-migration. |
+| `migration.top_k` | `50` | Number of elites broadcast to every island at each sync. |
+| `stopping.wall_clock_seconds` | `43200` | Hard 12 h budget. Drop to e.g. `1800` for a "try 30 min and bail" run. |
+| `cem.max_iters` | `100000` | Per-island iteration cap. Defaults are effectively unbounded; wall clock is what stops you. |
+| `logging.log_interval_iters` | `10` | How often each island writes a human-readable progress line to its log. |
+| `logging.metrics_interval_iters` | `1` | How often the per-iter JSONL row is written. Includes the iteration's best graph; leave at 1 unless disk space is a concern. |
+| `problem.n` | `19` | Graph size. The n=19 counterexample is the famous one; smaller `n` (e.g. 5–10) is useful for smoke testing. |
+
+### Things you should not touch unless you know why
+
+- `model.hidden_sizes`, `model.learning_rate`, `model.optimizer` — Adam
+  Wagner's exact values. Deviating without an ablation is almost
+  certainly worse.
+- `cem.n_sessions`, `cem.elite_percentile`, `cem.super_elite_percentile`,
+  `cem.train_batch_size`, `cem.train_epochs_per_iter` — same.
+- `parallelism.start_method` — leave at `spawn`. `fork` shares torch
+  state across processes and produces deeply weird bugs.
+- `model.init` — `keras` is the right choice and the only setting under
+  which we've ever found a counterexample. `pytorch_default` is kept as
+  an ablation toggle to reproduce the plateau failure mode; see the
+  "What 'good init' means" section.
+
+## Architecture
+
+```
+coordinator (1 process)
+├── spawns 16 island processes
+├── listener thread: PROGRESS | MIGRATE_OUT | SUCCESS | FAILED | DONE
+├── liveness thread: detects islands that die without sending a terminal
+│                    status (with a grace period for in-flight messages)
+├── main loop: polls signal flag + stop_event in 1 s slices
+└── on stop_event: drain queues, join islands, write summary.json
+
+island_i (1 process, ×16)
+├── own torch MLP, optimizer, RNG (seeded master_seed + i)
+├── own multiprocessing.Pool(8) for score eval
+├── CEM loop: sample(1000) → score → percentile-tie-cap elite filter →
+│             train(1 epoch, BCE, b=32) → maybe migrate
+└── on counterexample: notify coordinator, exit
+```
+
+128 cores total = 16 island main processes + 16 × 8 score workers, all
+pinned to 1 BLAS thread per process.
+
+## What's in the box
+
+```
+configs/default.yaml      every tunable — graph size, MLP shape, CEM percentiles,
+                          parallelism, migration cadence, logging, RNG seed.
+                          Nothing in code hardcodes these.
+
+src/graph_ce/
+  config.py               pydantic loader + override mechanism
+  model.py                PolicyMLP (342 → 128 → 64 → 4 → 1, sigmoid)
+  score.py                sqrt(n-1)+1 − λ₁ − μ (or -INF if disconnected)
+  matching.py             pure-Python Edmonds blossom (~24× faster than NetworkX
+                          on n=19, validated by stress test in tests/)
+  sampler.py              vectorized autoregressive bit-by-bit generation
+  cem.py                  one CEM iteration (sample → score → elite → train),
+                          with Wagner's percentile tie-cap
+  island.py               long-running worker: own MLP, own RNG, own score Pool
+  coordinator.py          master process: 16 islands, migration broker,
+                          liveness monitor, signal-safe graceful shutdown
+  verify.py               independently re-scores winners and writes the
+                          certificate
+  status.py               graph-ce-status: at-a-glance run health
+  plot_trajectories.py    graph-ce-plot: trajectory comparison figure
+  run.py                  graph-ce CLI entry
+
+scripts/
+  launch_detached.sh      setsid+nohup launcher — runs survive harness/session
+                          cleanup; writes runs/<name>.pid for `kill` later
+
+tests/                    65 unit tests (matching ↔ NetworkX oracle, sampling
+                          determinism, elite tie-cap, init schemes, smoke E2E)
+```
+
 ## Adapting the reward for a different graph conjecture
 
 The CEM machinery — sampler, model, training, parallelism, migration,
@@ -467,44 +540,6 @@ function ever changes.
 If you adapt this for another conjecture from Adam Wagner's paper, you're
 encouraged to keep your fork local — this repository is intentionally
 scoped to Conjecture 2.1.
-
-## Architecture
-
-```
-coordinator (1 process)
-├── spawns 16 island processes
-├── listener thread: PROGRESS | MIGRATE_OUT | SUCCESS | FAILED | DONE
-├── liveness thread: detects islands that die without sending a terminal
-│                    status (with a grace period for in-flight messages)
-├── main loop: polls signal flag + stop_event in 1 s slices
-└── on stop_event: drain queues, join islands, write summary.json
-
-island_i (1 process, ×16)
-├── own torch MLP, optimizer, RNG (seeded master_seed + i)
-├── own multiprocessing.Pool(8) for score eval
-├── CEM loop: sample(1000) → score → percentile-tie-cap elite filter →
-│             train(1 epoch, BCE, b=32) → maybe migrate
-└── on counterexample: notify coordinator, exit
-```
-
-128 cores total = 16 island main processes + 16 × 8 score workers, all
-pinned to 1 BLAS thread per process.
-
-## Reproducing the published-counterexample search
-
-The default config is exactly the configuration that won. Running
-`scripts/launch_detached.sh n19_main` and waiting should produce a winner
-within roughly 10–30 minutes (CEM is noisy, single-run variance is high).
-With migration **off** and everything else default, expect ~20 minutes.
-
-To reproduce the *failure modes* described above (e.g. for a blog post or
-to teach CEM gotchas), override the config:
-
-```bash
-# Reproduce the PyTorch-default init plateau:
-scripts/launch_detached.sh n19_bad_init \
-    --override model.init=pytorch_default
-```
 
 ## Tests
 
