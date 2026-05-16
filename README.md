@@ -86,27 +86,6 @@ story: 16 unique non-isomorphic graphs. Some islands froze as early as
 iter 1255 of 10500 and produced no further improvement across the
 remaining 88% of the run.
 
-### What the basin looks like
-
-The shared signature across all three bad-init runs:
-
-- **Sparse**: 18–20 edges (the counterexample we eventually want is
-  also 18 edges, so density alone is not the giveaway).
-- **Mostly trees, sometimes with one or two short cycles.**
-- **μ = 5** (with one μ = 4 outlier).
-- **λ₁ ≈ 2.4–3.0.**
-- **Two hubs** of degree 4–6, a few degree-2 internal vertices, lots of
-  degree-1 leaves — a "small spider" shape.
-
-The counterexample we want is also a tree, but a *very* different one:
-a *double broom* (long path of degree-2 vertices, with a bundle of
-leaves at each end), with μ = 2 and λ₁ > √18 ≈ 4.24. To get from a
-small two-hub spider to a double broom requires reshaping many edges
-simultaneously, which a per-edge Bernoulli policy cannot do in one or
-two CEM steps. The bad-init basin is therefore both *deep* (small
-perturbations always score worse) and *far* (many edges separate it
-from the counterexample basin). Together that explains the flatline.
-
 You can reproduce the analysis with:
 
 ```bash
