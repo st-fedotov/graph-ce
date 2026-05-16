@@ -244,29 +244,6 @@ all-zero state at each of the 171 positions.
 
 ![Per-position P(bit=1) heatmap across 8 seeds × 2 inits](plots/init_position_bias.png)
 
-The heatmap rows tell most of the story:
-
-- **Keras rows are uniformly near-white.** Each seed, each of the 171
-  positions: `P(bit=1)` ≈ 0.5. The policy starts as honest
-  Bernoulli(0.5) — exactly the uniform prior CEM expects.
-- **PyTorch-default rows are solid-coloured horizontal stripes.** Each
-  individual seed is essentially *constant* across all positions —
-  some seeds are uniformly blue (P ≈ 0.41, prefer 0 → start sparse),
-  others uniformly red (P ≈ 0.6, prefer 1 → start dense). The
-  position-to-position variation within a seed is tiny next to the
-  seed-to-seed shift.
-
-Numerically:
-
-```
-init                |P-0.5|  mean     std    max      per-seed max
-keras                          0.008  0.009  0.059    [.020 .048 .022 .027 .059 .019 .021 .015]
-pytorch_default                0.065  0.035  0.119    [.062 .094 .087 .016 .080 .058 .014 .119]
-```
-
-The pytorch_default per-seed maxima reach **±0.12 from 0.5**: a roughly
-8× larger average bias and a 2× larger worst-case bias than keras.
-
 ### Decomposing the cause: two orthogonal pathologies
 
 Three diagnostic probes (`scripts/init_policy_distribution.py`,
