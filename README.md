@@ -113,7 +113,7 @@ Let's look closer at the two initialization types.
   bounds as the weights, **not zero**.
 
 This seems to be a [well-known historical artifact in PyTorch](https://github.com/pytorch/pytorch/issues/15314): the function name references Kaiming/He init (He et al., 2015 — derived for ReLU with `a=0` so that activation variance is preserved through deep stacks), but the `a=sqrt(5)` parameter reduces the formula to LeCun's
-1998 bounds. LeCun's scheme is calibrated for linear or tanh networks with dense zero-mean unit-variance inputs.  None of those conditions actually hold for our setup: we have ReLU activations and 0-1 inputs. 
+1998 bounds. LeCun's scheme is calibrated for linear or tanh networks with dense zero-mean unit-variance inputs.  None of those conditions actually hold for our setup: we have ReLU activations and 0-1 inputs.
 
 **Keras's `Dense` default** (what Adam Wagner relies on):
 
@@ -123,60 +123,9 @@ This seems to be a [well-known historical artifact in PyTorch](https://github.co
 Glorot & Bengio (2010) derived this scheme to simultaneously preserve forward-activation variance and backward-gradient variance across layers. The derivation assumes (i) zero-mean unit-variance inputs and (ii) activations approximately linear around zero with unit derivative
 (tanh, sigmoid). It is therefore not theoretically optimal either for our inputs and ReLU, but it eventually works thanks to larger weight values.
 
-We sampled 500 graphs from a
-freshly-initialized PolicyMLP under each scheme, repeated across 8 model
-seeds, and measured the per-position `P(bit=1)` after feeding the
-all-zero state at each of the 171 positions.
-
-![Per-position P(bit=1) heatmap across 8 seeds × 2 inits](plots/init_position_bias.png)
-
-### Decomposing the cause: two orthogonal pathologies
-
-Two diagnostic probes — `scripts/init_policy_distribution.py` (the
-4-way σ table below) and `scripts/generation_progression.py` (the
-during-generation pictures further down) — pin the failure on the init
-*geometry*: not the activation, not the optimizer.
-
-We probed each init scheme with the following batch. The model expects
-a 342-dimensional input: the first 171 coordinates are the **state**
-(edge bits already sampled, 0 or 1), and the last 171 are a **position
-one-hot** (which edge to decide next). We fed it the "blank-state"
-batch — state set to all zeros, position one-hot stepped through each
-of the 171 positions in turn. That gives 171 model outputs per model,
-one per position. We summarise them by their mean `P̄(blank)` and
-standard deviation `σ(blank)` *across the 171 positions*:
-
-| init                          | P̄(blank) | σ(blank)   |
-|-------------------------------|----------|------------|
-| keras                         | 0.51     | **0.0083** |
-| pytorch_default               | **0.61** | 0.0008     |
-| pytorch_weights_zero_bias     | 0.50     | 0.0004     |
-| xavier_weights_pytorch_bias   | 0.64     | **0.0119** |
-
-Two pathologies decouple along orthogonal axes:
-
-- **Non-zero biases** set the offset P̄ (PyTorch's uniform biases push
-  it to ≈ 0.6).
-- **Kaiming `a=√5` weights** are too small to give the policy useful
-  input-dependence (σ collapses by ~10× compared with Xavier).
-
-Each pathology alone might be tolerable; together they make the policy
-a near-constant function of input. CEM has no per-position signal to
-learn from, locks onto the sparsest few elites among Bernoulli(0.61)
-samples, and ends up in the tree basin documented above.
-
 ### Watching it generate: per-step edge probabilities and their variance
 
-The blank-state table tells us what the policy emits when fed an
-all-zero state. But CEM doesn't sample from a blank state — it samples
-*autoregressively*, position by position, with the bits chosen at
-earlier steps feeding back as input. And elite selection only has
-something to bite on if those rollouts actually **differ from each
-other**. If every parallel session in an island generates an
-essentially identical Bernoulli process, the "best 7%" looks like the
-"worst 7%" and training has no gradient to follow. The right
-diagnostic is therefore the **variance of P(bit=1) across rollouts** at
-each generation step.
+For CEM to succeed, elite states in different rollouts should be diverse enough. But with Pytorch initialization, diversity only evolves very slowly. 
 
 For each init we ran 50 autoregressive rollouts from one iter-0 model
 (shared sampling RNG across inits, so trajectories diverge *only* when
@@ -188,20 +137,7 @@ columns.
 
 ![P(bit=1) heatmap: step × concrete rollout](plots/generation_edge_probs.png)
 
-- **keras** is textured top-to-bottom: as the state fills in with
-  sampled bits, the policy reacts, and per-step σ-across-rollouts ramps
-  from ≈ 0.005 at step 0 to ≈ 0.06 by step 170. Aggregate σ̄_step =
-  **0.043**, P̄ = 0.52. Different rollouts diverge into genuinely
-  different graphs.
-- **pytorch_default** is a near-uniform slab around P ≈ 0.61. σ_step
-  is flat at ≈ 0.003 throughout the rollout. Aggregate σ̄_step =
-  **0.003** — ~14× smaller than keras. Every rollout follows
-  essentially the same Bernoulli(0.61) process for all 171 steps.
-
-That ~14× gap in the variance of generated edge distributions is the
-quantitative content of the failure. Elite selection over
-Bernoulli(0.61) samples cannot reliably tell good rollouts from bad
-ones, and CEM stalls before training has anything to learn from.
+As you see, Keras-style initialization leads to much more diverse generations (~14x gap in variance), producing more structured graphs, while Pytorch gives a much more uniform image. And the counterexample graph we strive to get is very structured.
 
 ### Where the variance vanishes: layer by layer along one rollout
 
@@ -218,7 +154,7 @@ shared across inits within each row.
 | layer            | keras (alive/total, σ_step)  | pytorch_default              |
 |------------------|------------------------------|------------------------------|
 | hidden_1 (128)   | 128/128, σ = **0.124**       | 128/128, σ = **0.070**       |
-| hidden_2 (64)    | **60/64**, σ = **0.084**     | **55/64**, σ = **0.021**     |
+| hidden_2 (64)    | 60/64, σ = **0.084**     | 55/64, σ = **0.021**     |
 | hidden_3 (4)     | 4/4,    σ = **0.132**        | 4/4,    σ = **0.016**        |
 | output P(bit=1)  | σ_step ≈ **0.13**            | σ_step ≈ **0.004**           |
 
@@ -226,62 +162,11 @@ shared across inits within each row.
 units. Different statistic from σ̄_step above, which was std over
 rollouts averaged over steps — but they tell the same story.)
 
-Three things to note:
+Some hidden_2 units die under both inits, but what seems to be important here is the difference in variances.
 
-1. **The first layer already halves the signal.** Kaiming `a=√5`
-   weights have bound `1/√fan_in`; Xavier has
-   `√(6/(fan_in+fan_out))`, roughly 2× larger for the input layer.
-   Even with the actual (sparse) generated state feeding back rather
-   than zero, pytorch_default's σ at hidden_1 is ~half of keras's.
-2. **Some hidden_2 units die under both inits** when fed a real
-   trajectory — 4 dead under keras, 9 under pytorch_default — but
-   beyond the count, pytorch_default's σ at this layer is 4× lower
-   across all units. The live units aren't carrying useful signal
-   either.
-3. **The 4-unit bottleneck at hidden_3 amplifies the per-unit
-   collapse** into a ~30× output suppression for pytorch_default
-   (output σ_step 0.13 → 0.004).
+**Note**: We might suspect that ReLU might partially be to blame in this situation, but switching to `LeakyReLU` doesn't save Pytorch initialization.
 
-### Why LeakyReLU doesn't help
-
-The dying-layer-2-units detail suggests an obvious fix: swap ReLU for
-LeakyReLU (negative slope 0.01) so units can't go fully dead. We tried
-it — both as the same probe and as a 16-min CEM run with
-`activation=leaky_relu`.
-
-![Same probe under LeakyReLU](plots/activations_during_generation_leaky.png)
-
-| layer    | pytorch + ReLU              | pytorch + LeakyReLU         |
-|----------|-----------------------------|-----------------------------|
-| hidden_2 | **55/64**, σ_step = 0.021   | **64/64**, σ_step = 0.022   |
-| output   | σ_step ≈ **0.004**          | σ_step ≈ **0.004**          |
-
-LeakyReLU resurrects all 9 dead hidden_2 units — but mean σ at that
-layer is unchanged (0.021 → 0.022), and the output collapse is
-identical. The newly "alive" units pass signal at 1% strength (the
-leaky slope); they're alive in name only. The full CEM run plateaued
-in the same `v5` basin within 2300 iterations.
-
-**The bottleneck isn't the rectification — it's the weight magnitudes.**
-Kaiming `a=√5` is calibrated for dense, unit-variance inputs; our
-inputs are sparse one-hot vectors where the bias has the same magnitude
-as the single active weight. The cure is bigger weights, which is what
-Xavier does.
-
-The `model.init` and `model.activation` config fields expose all
-schemes used above:
-
-```yaml
-model:
-  init: keras            # Glorot uniform weights + zero bias.  Default.
-  # init: pytorch_default                # reproduces the bug
-  # init: pytorch_weights_zero_bias      # ablation: isolate the bias
-  # init: xavier_weights_pytorch_bias    # ablation: isolate the weight scale
-  activation: relu       # 'leaky_relu' available for ablation; doesn't fix pytorch_default.
-```
-
-We recommend leaving it on `keras` + `relu`. The other modes are kept
-so the failure can be replicated and decomposed.
+So the takeaway here is, I would say: if you try to use initialization, which is theoretically good for one input distribution, for a totally different kind of input distribution, you might get bad results.
 
 ## Other gotchas worth knowing
 
