@@ -46,7 +46,7 @@ Here, we experimented with:
 
 * batch size `b`
 * `migration` on/off - whether top-scoring examples were shared between parallel cross-entropy runs ("islands")
-* layer initialization: for the MLP we used it's either Xavier (used by default in Keras and the original Wagner's implementation) or Kaiming (used by default in Pytorch)
+* layer initialization: for the MLP we used either Xavier (used by default in Keras and the original Wagner's implementation) or Kaiming (used by default in Pytorch)
 
 Each color shows 3 best per-island trajectories. The two configs that cross the dotted victory line at score = 0 (purple and brown) are the two successful runs.
 
