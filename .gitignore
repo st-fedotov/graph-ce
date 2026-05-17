@@ -22,16 +22,11 @@ plots/*
 !plots/setup_comparison.png
 !plots/winner_8_10_double_broom.png
 !plots/winner_9_9_double_broom.png
-!plots/init_comparison.png
-!plots/init_position_bias.png
-!plots/init_example_graphs.png
 !plots/plateau_trees_n19_main_plateau_v3.png
 !plots/plateau_trees_n19_main_plateau_v4.png
 !plots/plateau_trees_n19_main_plateau_v5.png
 !plots/generation_edge_probs.png
-!plots/generation_edge_probs_leaky.png
 !plots/activations_during_generation.png
-!plots/activations_during_generation_leaky.png
 
 # Wagner's original reference code (fetched locally for line-by-line
 # comparison during development; not ours to redistribute — see README).
