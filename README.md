@@ -10,7 +10,7 @@ A modern PyTorch reimplementation of Adam Zsolt Wagner's cross-entropy method
 
 The conjecture is false at n = 19. This codebase rediscovers a counterexample
 in **about 10 minutes** of wall time on a 128-core CPU server (no GPU
-required), with 16 parallel CEM islands.
+required), with 16 parallel Cross-Entropy Method islands.
 
 ## Result
 
@@ -42,49 +42,37 @@ Both are reproducible from saved adjacency matrices via
 
 ![Top-3 island trajectories for six setups](plots/setup_comparison.png)
 
-Each color is one configuration, each color shows 3 island trajectories
-(same style — overlapping means migration synced them). The two configs
-that cross the dotted victory line at score = 0 (purple and brown) are the
-two correct runs. The bad-init configs (green, blue, orange) flatline well
-below 0 regardless of batch size or migration — that's the "stuck-in-local-
-optimum" signature.
+Here, we experimented with:
 
-## What the failure looks like — anatomy of the bad-init plateau
+* batch size `b`
+* `migration` on/off - whether top-scoring examples were shared between parallel cross-entropy runs ("islands")
+* layer initialization: for the MLP we used it's either Xavier (used by default in Keras and the original Wagner's implementation) or Kaiming (used by default in Pytorch)
 
-The three bad-init runs (v3/v4/v5 above) each have 16 parallel islands.
-The natural question: when those runs plateau, what graph is each island
-*stuck on*? Are the 16 islands all stuck on the same graph, or different
-ones? And how stable is the stuck state — does it fluctuate or freeze
-solid?
+Each color shows 3 best per-island trajectories. The two configs that cross the dotted victory line at score = 0 (purple and brown) are the two successful runs.
 
-We answered this by reading each island's per-iteration metrics file
-(every iter records the best graph seen so far), partitioning the 16
-final graphs into graph-isomorphism classes, and timing when each
-island's best graph last changed. The probe lives at
-`scripts/explore_plateau_topology.py`.
+It's interesting that layer intialization influences the result so much; we tried to investigate it a bit.
+
+## Why the wrong initialization breaks the training process?
+
+First of all, let's visualize the results, showing the best graph from each island at the final iteration of CEM. We also show the timing when each
+island's best graph last changed. The probe lives at `scripts/explore_plateau_topology.py`.
 
 ### With migration: all 16 islands collapse to the same tree
 
 ![One tree — v3 (PyTorch init + migration, b=512)](plots/plateau_trees_n19_main_plateau_v3.png)
 
-In `n19_main_plateau_v3` (PyTorch init, migration on, b=512), all 16
-islands converge to **the same tree**, up to graph isomorphism, and showed no further improvement.
+In `n19_main_plateau_v3` (PyTorch init, migration on, b=512), all 16 islands converge to **the same tree**, up to graph isomorphism, and showed no further improvement. That's the price of best-graph migration: it speeds up convergence to a local optimum.
 
 ### Without migration: every island finds its own local optimum
 
 ![16 distinct graphs — v4 (PyTorch init, no migration, b=512)](plots/plateau_trees_n19_main_plateau_v4.png)
 
-In `n19_main_plateau_v4` (PyTorch init, no migration, b=512), every island
-discovers a unique local optimum. The best one (island 01) has μ = 4 and
-score −1.512 — a long thin tree with a degree-7 hub; the rest cluster
-around μ = 5, λ₁ between 2.39 and 3.03.
+In `n19_main_plateau_v4` (PyTorch init, no migration, b=512), every island discovers a unique local optimum. The graphs fail to evolve massive hubs needed for the actual counterexample.
 
 ![16 distinct graphs — v5 (PyTorch init, no migration, b=32)](plots/plateau_trees_n19_main_plateau_v5.png)
 
-`n19_main_plateau_v5` (PyTorch init, no migration, b=32) shows the same
-story: 16 unique non-isomorphic graphs. Some islands froze as early as
-iter 1255 of 10500 and produced no further improvement across the
-remaining 88% of the run.
+`n19_main_plateau_v5` (PyTorch init, no migration, b=32) shows the same story: 16 unique non-isomorphic graphs. Some islands froze as early as
+iter 1255 of 10500 and produced no further improvement across the remaining 88% of the run.
 
 You can reproduce the analysis with:
 
@@ -97,49 +85,45 @@ You can reproduce the analysis with:
 
 ## What "good init" means — and why it matters so much
 
-The single change that turned the project from "stuck forever at score
--1.5" into "finds the counterexample in 10 minutes":
+In our task, the data is quite specific. Namely, we generate a graph step by step, on `i`-th step feeding into the network a vector of length 342
+
+```
+[
+  edge(1)/no edge(0) at positions 0...i-1 |
+  zeros at positions i...171 |
+  one-hot encoding of i
+]
+```
+
+to predict edge/no edge at position `i`.
+
+As you see, it's quite unlike images or dense text embeddings.
+
+Let's look closer at the two initialization types.
 
 **PyTorch's `nn.Linear` default**:
 
-- **Weights** come from `nn.init.kaiming_uniform_(weight, a=√5)`.
-  Plugging `a=√5` into the Kaiming formula yields gain = `√(2/(1+5)) =
-  1/√3`, so the bound simplifies to `1/√fan_in`. Weights are drawn from
-  `U(−1/√fan_in, +1/√fan_in)`. For our four-layer MLP that's `±0.054`
+- **Weights** come from the **Kaiming** initialization `nn.init.kaiming_uniform_(weight, a=sqrt(5))`.
+  Plugging `a=sqrt(5)` into the Kaiming formula yields gain = `sqrt(2/(1+5)) =
+  1/sqrt(3)`, so the bound simplifies to `1/sqrt(d_in)`. Weights are drawn from
+  `U(−1/sqrt(d_in), +1/sqrt(d_in))`. For the four-layer MLP we used that's `±0.054`
   (layer 1, 342→128), `±0.088` (layer 2, 128→64), `±0.125` (layer 3,
   64→4), `±0.500` (layer 4, 4→1).
-- **Biases** are *also* drawn from `U(−1/√fan_in, +1/√fan_in)` — same
+- **Biases** are *also* drawn from `U(−1/sqrt(d_in), +1/sqrt(d_in))` — same
   bounds as the weights, **not zero**.
 
-This is a [well-known historical artifact in PyTorch](https://github.com/pytorch/pytorch/issues/15314):
-the function name references Kaiming/He init (He et al., 2015 — derived
-for ReLU with `a=0` so that activation variance is preserved through
-deep stacks), but the `a=√5` parameter reduces the formula to LeCun's
-1998 bounds. LeCun's scheme is calibrated for linear or tanh networks
-fed dense zero-mean unit-variance inputs. None of those conditions
-hold for our setup: we have ReLU activations and sparse one-hot inputs
-where the effective fan-in is **1**, not 342. The non-zero biases are
-heuristic too — Glorot, Kaiming, and LeCun all use zero biases in
-their original derivations.
+This seems to be a [well-known historical artifact in PyTorch](https://github.com/pytorch/pytorch/issues/15314): the function name references Kaiming/He init (He et al., 2015 — derived for ReLU with `a=0` so that activation variance is preserved through deep stacks), but the `a=sqrt(5)` parameter reduces the formula to LeCun's
+1998 bounds. LeCun's scheme is calibrated for linear or tanh networks with dense zero-mean unit-variance inputs.  None of those conditions actually hold for our setup: we have ReLU activations and 0-1 inputs. 
 
 **Keras's `Dense` default** (what Adam Wagner relies on):
 
-- **Weights** are Glorot ("Xavier") uniform — drawn from `U(−a, +a)`
-  with `a = √(6 / (fan_in + fan_out))`. For our four-layer MLP that's
-  `±0.113` (layer 1), `±0.177` (layer 2), `±0.297` (layer 3), `±1.095`
-  (layer 4).
+- **Weights** are Glorot (Xavier) uniform — drawn from `U(−a, +a)`  with `a = sqrt(6 / (fan_in + fan_out))`. For our four-layer MLP that's `±0.113` (layer 1), `±0.177` (layer 2), `±0.297` (layer 3), `±1.095` (layer 4).
 - **Biases** are zero.
 
-Glorot & Bengio (2010) derived this scheme to simultaneously preserve
-forward-activation variance and backward-gradient variance across
-layers. The derivation assumes (i) zero-mean unit-variance inputs and
-(ii) activations approximately linear around zero with unit derivative
-(tanh, sigmoid). It is therefore not theoretically optimal for ReLU —
-Kaiming/He is — but for shallow ReLU nets like ours it works fine, and
-the zero biases mean a fresh model emits `sigmoid(0) = 0.5` on average,
-giving CEM an honest Bernoulli(½) starting policy.
+Glorot & Bengio (2010) derived this scheme to simultaneously preserve forward-activation variance and backward-gradient variance across layers. The derivation assumes (i) zero-mean unit-variance inputs and (ii) activations approximately linear around zero with unit derivative
+(tanh, sigmoid). It is therefore not theoretically optimal either for our inputs and ReLU, but it eventually works thanks to larger weight values.
 
-The difference looks cosmetic. It is not. We sampled 500 graphs from a
+We sampled 500 graphs from a
 freshly-initialized PolicyMLP under each scheme, repeated across 8 model
 seeds, and measured the per-position `P(bit=1)` after feeding the
 all-zero state at each of the 171 positions.
