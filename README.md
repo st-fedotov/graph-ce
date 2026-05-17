@@ -431,21 +431,6 @@ all stay the same. Adam Wagner's paper applies CEM the same way to a
 dozen conjectures with different score functions — only the score
 function ever changes.
 
-### What's *not* easy to swap
-
-- **Directed graphs** (the bit-encoding length doubles from `n(n−1)/2` to
-  `n(n−1)`; sampling and score input change accordingly).
-- **Weighted edges** (the alphabet stops being binary; Wagner has a short
-  note on this — you'd switch the model's output to softmax over k
-  categories and use cross-entropy loss).
-- **Variable `n` within one run** (we treat `n` as a single config value).
-- **Multi-graph encodings, hypergraphs, or anything beyond simple graphs**
-  (the encoding layer would need substantial extension).
-
-If you adapt this for another conjecture from Adam Wagner's paper, you're
-encouraged to keep your fork local — this repository is intentionally
-scoped to Conjecture 2.1.
-
 ## Tests
 
 ```bash
