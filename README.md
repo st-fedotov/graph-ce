@@ -132,10 +132,10 @@ all-zero state at each of the 171 positions.
 
 ### Decomposing the cause: two orthogonal pathologies
 
-Three diagnostic probes (`scripts/init_policy_distribution.py`,
-`scripts/generation_trajectory_distribution.py`,
-`scripts/activation_through_layers.py`) pin the failure on the init
-*geometry* — not the activation, not the optimizer.
+Two diagnostic probes — `scripts/init_policy_distribution.py` (the
+4-way σ table below) and `scripts/generation_progression.py` (the
+during-generation pictures further down) — pin the failure on the init
+*geometry*: not the activation, not the optimizer.
 
 We probed each init scheme with the following batch. The model expects
 a 342-dimensional input: the first 171 coordinates are the **state**
@@ -165,66 +165,102 @@ a near-constant function of input. CEM has no per-position signal to
 learn from, locks onto the sparsest few elites among Bernoulli(0.61)
 samples, and ends up in the tree basin documented above.
 
-### Autoregressive sampling doesn't rescue it
+### Watching it generate: per-step edge probabilities and their variance
 
-You might hope the conditional structure of the rollout creates
-variation as the state fills in — by position 170 the state has
-~100 active bits, after all. It doesn't:
+The blank-state table tells us what the policy emits when fed an
+all-zero state. But CEM doesn't sample from a blank state — it samples
+*autoregressively*, position by position, with the bits chosen at
+earlier steps feeding back as input. And elite selection only has
+something to bite on if those rollouts actually **differ from each
+other**. If every parallel session in an island generates an
+essentially identical Bernoulli process, the "best 7%" looks like the
+"worst 7%" and training has no gradient to follow. The right
+diagnostic is therefore the **variance of P(bit=1) across rollouts** at
+each generation step.
 
-![Autoregressive-rollout P(bit=1) trajectories at iter 0](plots/generation_trajectory_distribution.png)
+For each init we ran 50 autoregressive rollouts from one iter-0 model
+(shared sampling RNG across inits, so trajectories diverge *only* when
+the policy itself responds differently to state). Heatmap rows are
+generation steps, columns are concrete rollouts, color is the policy's
+`P(bit=1)` at that step in that rollout. The bottom strip plots
+per-step σ-across-rollouts (red) and mean (blue), shared y-axis across
+columns.
 
-The model still emits P ≈ 0.607 throughout the rollout. The median
-curve is flat (σ across positions: 0.0018), the 10–90 percentile band
-barely opens, and ReLU and LeakyReLU agree to 4 decimal places. The
-weights are simply too small to respond to the growing state input.
+![P(bit=1) heatmap: step × concrete rollout](plots/generation_edge_probs.png)
 
-### The mechanism: signal collapse, layer by layer
+- **keras** is textured top-to-bottom: as the state fills in with
+  sampled bits, the policy reacts, and per-step σ-across-rollouts ramps
+  from ≈ 0.005 at step 0 to ≈ 0.06 by step 170. Aggregate σ̄_step =
+  **0.043**, P̄ = 0.52. Different rollouts diverge into genuinely
+  different graphs.
+- **pytorch_default** is a near-uniform slab around P ≈ 0.61. σ_step
+  is flat at ≈ 0.003 throughout the rollout. Aggregate σ̄_step =
+  **0.003** — ~14× smaller than keras. Every rollout follows
+  essentially the same Bernoulli(0.61) process for all 171 steps.
 
-Feeding `(blank state, one-hot position p)` through the 4-layer stack
-for each `p ∈ [0, 170]` and capturing each post-activation:
+That ~14× gap in the variance of generated edge distributions is the
+quantitative content of the failure. Elite selection over
+Bernoulli(0.61) samples cannot reliably tell good rollouts from bad
+ones, and CEM stalls before training has anything to learn from.
 
-![Signal propagation through the policy MLP](plots/activation_through_layers.png)
+### Where the variance vanishes: layer by layer along one rollout
 
-| layer            | keras (alive/total, σ_pos) | pytorch_default              |
-|------------------|----------------------------|------------------------------|
-| hidden_1 (128)   | 128/128, σ = **0.036**     | 128/128, σ = **0.018**       |
-| hidden_2 (64)    | 64/64,   σ = **0.023**     | **46/64**, σ = **0.007**     |
-| hidden_3 (4)     | 4/4,     σ = **0.028**     | 4/4,     σ = **0.005**       |
-| output P(bit=1)  | σ = **0.008**              | σ = **0.0008**               |
+To localize the collapse, we capture the post-activation of every
+hidden layer along a single representative rollout — the leftmost
+column of the heatmap above, marked with a white dashed line. Each
+heatmap is rows = generation step, columns = hidden units sorted
+left-to-right by their across-step σ (so "alive" units cluster on the
+left and the dead/saturated slab is on the right). Color scales are
+shared across inits within each row.
+
+![Layer-by-layer activations along one autoregressive rollout](plots/activations_during_generation.png)
+
+| layer            | keras (alive/total, σ_step)  | pytorch_default              |
+|------------------|------------------------------|------------------------------|
+| hidden_1 (128)   | 128/128, σ = **0.124**       | 128/128, σ = **0.070**       |
+| hidden_2 (64)    | **60/64**, σ = **0.084**     | **55/64**, σ = **0.021**     |
+| hidden_3 (4)     | 4/4,    σ = **0.132**        | 4/4,    σ = **0.016**        |
+| output P(bit=1)  | σ_step ≈ **0.13**            | σ_step ≈ **0.004**           |
+
+(`σ_step` here = std over 171 steps of *this* rollout, averaged over
+units. Different statistic from σ̄_step above, which was std over
+rollouts averaged over steps — but they tell the same story.)
 
 Three things to note:
 
-1. **Signal halves at the very first layer** — Kaiming `a=√5` weights
-   have bound `1/√fan_in`; Xavier has `√(6/(fan_in+fan_out))`, roughly
-   2× larger for the first layer.
-2. **18 of 64 layer-2 units die** under `pytorch_default`. They didn't
-   die in layer 1 — with sparse one-hot inputs, the bias is the same
-   magnitude as the single active weight, and only ~50% of units land
-   on the wrong side of zero. By layer 2 every layer-1 unit passes a
-   bias-shifted offset, and combined with layer-2 biases this pushes
-   28% of layer-2 pre-activations into the always-negative half-plane.
-3. The **4-unit bottleneck** at hidden_3 amplifies the per-unit
-   collapse into a 10× output suppression.
+1. **The first layer already halves the signal.** Kaiming `a=√5`
+   weights have bound `1/√fan_in`; Xavier has
+   `√(6/(fan_in+fan_out))`, roughly 2× larger for the input layer.
+   Even with the actual (sparse) generated state feeding back rather
+   than zero, pytorch_default's σ at hidden_1 is ~half of keras's.
+2. **Some hidden_2 units die under both inits** when fed a real
+   trajectory — 4 dead under keras, 9 under pytorch_default — but
+   beyond the count, pytorch_default's σ at this layer is 4× lower
+   across all units. The live units aren't carrying useful signal
+   either.
+3. **The 4-unit bottleneck at hidden_3 amplifies the per-unit
+   collapse** into a ~30× output suppression for pytorch_default
+   (output σ_step 0.13 → 0.004).
 
 ### Why LeakyReLU doesn't help
 
 The dying-layer-2-units detail suggests an obvious fix: swap ReLU for
 LeakyReLU (negative slope 0.01) so units can't go fully dead. We tried
-it — both as the same diagnostic and as a 16-min CEM run with
+it — both as the same probe and as a 16-min CEM run with
 `activation=leaky_relu`.
 
-![Same probe under LeakyReLU](plots/activation_through_layers_leaky.png)
+![Same probe under LeakyReLU](plots/activations_during_generation_leaky.png)
 
-| layer    | pytorch + ReLU         | pytorch + LeakyReLU    |
-|----------|------------------------|------------------------|
-| hidden_2 | **46/64**, σ = 0.0067  | **63/64**, σ = 0.0068  |
-| output   | σ = **0.0008**         | σ = **0.0008**         |
+| layer    | pytorch + ReLU              | pytorch + LeakyReLU         |
+|----------|-----------------------------|-----------------------------|
+| hidden_2 | **55/64**, σ_step = 0.021   | **64/64**, σ_step = 0.022   |
+| output   | σ_step ≈ **0.004**          | σ_step ≈ **0.004**          |
 
-LeakyReLU resurrects 17 of 18 dead units — but mean σ at that layer
-is unchanged (0.0067 → 0.0068), and the output collapse is identical.
-The newly "alive" units pass signal at 1% strength (the leaky slope);
-they're alive in name only. The CEM run plateaued in the same `v5`
-basin within 2300 iterations.
+LeakyReLU resurrects all 9 dead hidden_2 units — but mean σ at that
+layer is unchanged (0.021 → 0.022), and the output collapse is
+identical. The newly "alive" units pass signal at 1% strength (the
+leaky slope); they're alive in name only. The full CEM run plateaued
+in the same `v5` basin within 2300 iterations.
 
 **The bottleneck isn't the rectification — it's the weight magnitudes.**
 Kaiming `a=√5` is calibrated for dense, unit-variance inputs; our
